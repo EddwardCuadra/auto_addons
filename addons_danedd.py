@@ -1,6 +1,7 @@
 import os
 import json
 import shutil
+import subprocess
 
 # Leer el level-name desde server.properties
 def get_level_name():
@@ -133,5 +134,8 @@ resource_json_path = os.path.join(base_path, f"worlds/{level_name}/world_resourc
 # Procesar los addons
 process_addons(addons_path, behavior_path, resource_path, behavior_json_path, resource_json_path)
 
-# Inicializar Servidor Bedrock con el comando ./bedrock_server
-os.system("./bedrock_server")
+# Ejecutar el servidor Bedrock
+try:
+    subprocess.run(["./bedrock_server"], check=True)
+except subprocess.CalledProcessError as e:
+    print(f"Error al iniciar el servidor: {e}")
