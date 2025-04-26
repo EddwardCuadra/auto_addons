@@ -132,3 +132,6 @@ resource_json_path = os.path.join(base_path, f"worlds/{level_name}/world_resourc
 
 # Procesar los addons
 process_addons(addons_path, behavior_path, resource_path, behavior_json_path, resource_json_path)
+
+# Inicializar Servidor Bedrock con el comando ./bedrock_server
+os.system("./bedrock_server")
