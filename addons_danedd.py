@@ -85,7 +85,7 @@ def process_addons(addons_path, behavior_path, resource_path, behavior_json_path
             continue
 
         module_type = modules[0].get("type")
-        if module_type == "data":
+        if module_type in ["data", "script"]:
             target_path = behavior_path
             target_json = behavior_packs
             json_path = behavior_json_path
@@ -121,6 +121,67 @@ def process_addons(addons_path, behavior_path, resource_path, behavior_json_path
 
     print(f"Se añadieron {added_behavior} behavior packs y {added_resource} resource packs.")
 
+def clean_unregistered_addons(behavior_path, resource_path, behavior_json_path, resource_json_path):
+    # Cargar los datos registrados en los archivos JSON
+    behavior_packs = load_or_initialize_json(behavior_json_path)
+    resource_packs = load_or_initialize_json(resource_json_path)
+
+    # Obtener los UUIDs registrados
+    registered_behavior_uuids = {pack["pack_id"] for pack in behavior_packs}
+    registered_resource_uuids = {pack["pack_id"] for pack in resource_packs}
+
+    # Limpiar behavior_packs
+    for folder in os.listdir(behavior_path):
+        folder_path = os.path.join(behavior_path, folder)
+        manifest_path = os.path.join(folder_path, "manifest.json")
+        if os.path.isdir(folder_path) and os.path.exists(manifest_path):
+            try:
+                with open(manifest_path, "r") as file:
+                    manifest = json.load(file)
+                    uuid = manifest.get("header", {}).get("uuid")
+                    if uuid not in registered_behavior_uuids:
+                        print(f"Eliminando addon no registrado en behavior_packs: {folder}")
+                        shutil.rmtree(folder_path)
+            except (json.JSONDecodeError, KeyError):
+                print(f"Error al procesar el manifest.json en {folder}.")
+                print(f"Revisar manualmente el addon en la carpeta: {folder_path}")
+                print(f"Tipo: {'behavior' if folder_path.startswith(behavior_path) else 'resource'}")
+                try:
+                    with open(manifest_path, "r") as file:
+                        manifest = json.load(file)
+                        uuid = manifest.get("header", {}).get("uuid", "Desconocido")
+                        version = manifest.get("header", {}).get("version", "Desconocida")
+                        print(f"UUID: {uuid}")
+                        print(f"Versión: {version}")
+                except json.JSONDecodeError:
+                    print("El archivo manifest.json está corrupto y no se pudo leer.")
+
+    # Limpiar resource_packs
+    for folder in os.listdir(resource_path):
+        folder_path = os.path.join(resource_path, folder)
+        manifest_path = os.path.join(folder_path, "manifest.json")
+        if os.path.isdir(folder_path) and os.path.exists(manifest_path):
+            try:
+                with open(manifest_path, "r") as file:
+                    manifest = json.load(file)
+                    uuid = manifest.get("header", {}).get("uuid")
+                    if uuid not in registered_resource_uuids:
+                        print(f"Eliminando addon no registrado en resource_packs: {folder}")
+                        shutil.rmtree(folder_path)
+            except (json.JSONDecodeError, KeyError):
+                print(f"Error al procesar el manifest.json en {folder}.")
+                print(f"Revisar manualmente el addon en la carpeta: {folder_path}")
+                print(f"Tipo: {'behavior' if folder_path.startswith(behavior_path) else 'resource'}")
+                try:
+                    with open(manifest_path, "r") as file:
+                        manifest = json.load(file)
+                        uuid = manifest.get("header", {}).get("uuid", "Desconocido")
+                        version = manifest.get("header", {}).get("version", "Desconocida")
+                        print(f"UUID: {uuid}")
+                        print(f"Versión: {version}")
+                except json.JSONDecodeError:
+                    print("El archivo manifest.json está corrupto y no se pudo leer.")
+
 # Ruta base del servidor
 base_path = os.getcwd()
 addons_path = os.path.join(base_path, "addons")
@@ -133,6 +194,7 @@ resource_json_path = os.path.join(base_path, f"worlds/{level_name}/world_resourc
 
 # Procesar los addons
 process_addons(addons_path, behavior_path, resource_path, behavior_json_path, resource_json_path)
+clean_unregistered_addons(behavior_path, resource_path, behavior_json_path, resource_json_path)
 
 # Ejecutar el servidor Bedrock
 try:
