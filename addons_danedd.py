@@ -143,19 +143,10 @@ def clean_unregistered_addons(behavior_path, resource_path, behavior_json_path, 
                     if uuid not in registered_behavior_uuids:
                         print(f"Eliminando addon no registrado en behavior_packs: {folder}")
                         shutil.rmtree(folder_path)
-            except (json.JSONDecodeError, KeyError):
-                print(f"Error al procesar el manifest.json en {folder}.")
-                print(f"Revisar manualmente el addon en la carpeta: {folder_path}")
-                print(f"Tipo: {'behavior' if folder_path.startswith(behavior_path) else 'resource'}")
-                try:
-                    with open(manifest_path, "r") as file:
-                        manifest = json.load(file)
-                        uuid = manifest.get("header", {}).get("uuid", "Desconocido")
-                        version = manifest.get("header", {}).get("version", "Desconocida")
-                        print(f"UUID: {uuid}")
-                        print(f"Versión: {version}")
-                except json.JSONDecodeError:
-                    print("El archivo manifest.json está corrupto y no se pudo leer.")
+            except json.JSONDecodeError as e:
+                print(f"Error al leer el manifest.json en {folder}: {e}")
+                print(f"El addon {folder} debe ser revisado manualmente.")
+                continue
 
     # Limpiar resource_packs
     for folder in os.listdir(resource_path):
@@ -184,7 +175,6 @@ def clean_unregistered_addons(behavior_path, resource_path, behavior_json_path, 
                     print("El archivo manifest.json está corrupto y no se pudo leer.")
 
 def clean_orphaned_entries(behavior_path, resource_path, behavior_json_path, resource_json_path):
-    # Limpiar entradas huérfanas en world_behavior_packs.json
     behavior_packs = load_or_initialize_json(behavior_json_path)
     updated_behavior_packs = []
 
@@ -201,8 +191,11 @@ def clean_orphaned_entries(behavior_path, resource_path, behavior_json_path, res
                         if manifest.get("header", {}).get("uuid") == pack_id:
                             found = True
                             break
-                except json.JSONDecodeError:
-                    print(f"Error al leer el manifest.json en {folder_path}.")
+                except json.JSONDecodeError as e:
+                    print(f"Error al leer el manifest.json en {folder}: {e}")
+                    print(f"El addon {folder} debe ser revisado manualmente.")
+                    continue
+
         if found:
             updated_behavior_packs.append(pack)
         else:
@@ -242,7 +235,7 @@ def extract_mcaddon_and_mcpack(addons_path):
         if file.endswith(".mcaddon") or file.endswith(".mcpack"):
             try:
                 # Crear una carpeta con el mismo nombre que el archivo (sin extensión)
-                extract_folder = os.path.join(addons_path, os.path.splitext(file)[0])
+                extract_folder = os.path.join(addons_path, os.path.splitext(file)[0] + "_")
                 os.makedirs(extract_folder, exist_ok=True)
 
                 # Extraer el contenido del archivo
@@ -258,11 +251,17 @@ def extract_mcaddon_and_mcpack(addons_path):
 
 def process_mcaddon_and_mcpack(addons_path):
     def process_folder(folder_path):
-        # Buscar manifest.json en la carpeta
         manifest_path = os.path.join(folder_path, "manifest.json")
         if os.path.exists(manifest_path):
-            print(f"Se encontró manifest.json en {folder_path}. Procediendo con el registro.")
-            return True  # Se encontró el manifest.json, se puede registrar
+            try:
+                with open(manifest_path, "r") as file:
+                    manifest = json.load(file)
+                print(f"Se encontró manifest.json en {folder_path}. Procediendo con el registro.")
+                return True
+            except json.JSONDecodeError as e:
+                print(f"Error al leer el manifest.json en {folder_path}: {e}")
+                print(f"El addon debe ser revisado manualmente.")
+                return False
 
         # Si no hay manifest.json, verificar subcarpetas o archivos .mcpack/.mcaddon
         subfolders = [os.path.join(folder_path, f) for f in os.listdir(folder_path)]
