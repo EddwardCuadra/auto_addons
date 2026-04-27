@@ -1,8 +1,55 @@
 import os
 import json
+import json5
 import shutil
 import subprocess
 import zipfile
+import time
+from typing import Any, cast
+
+
+def _trim_to_first_json_document(text):
+    start = None
+    depth = 0
+    in_string = False
+    escape = False
+    quote_char = ""
+
+    for index, char in enumerate(text):
+        if start is None:
+            if char in "[{":
+                start = index
+                depth = 1
+            continue
+
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == quote_char:
+                in_string = False
+            continue
+
+        if char in "\"'":
+            in_string = True
+            quote_char = char
+        elif char in "[{":
+            depth += 1
+        elif char in "]}":
+            depth -= 1
+            if depth == 0:
+                return text[start:index + 1]
+
+    return text[start:] if start is not None else text
+
+
+def _move_replacing_existing(source_path, destination_path):
+    if os.path.isdir(destination_path):
+        shutil.rmtree(destination_path)
+    elif os.path.lexists(destination_path):
+        os.remove(destination_path)
+    shutil.move(source_path, destination_path)
 
 # Leer el level-name desde server.properties
 def get_level_name():
@@ -33,21 +80,28 @@ def ensure_directories_exist(base_path, level_name):
     return behavior_path, resource_path
 
 # Leer o inicializar archivos JSON
-def load_or_initialize_json(file_path):
+def load_or_initialize_json(file_path: str) -> list[dict[str, Any]]:
     if os.path.exists(file_path):
-        with open(file_path, "r") as file:
+        with open(file_path, "r", encoding="utf-8") as file:
+            raw_text = file.read()
+
+        try:
+            data = json5.loads(raw_text)
+        except ValueError:
             try:
-                data = json.load(file)
-                if isinstance(data, list):  # Verifica si es una lista
-                    return data
-                else:
-                    print(f"Advertencia: {file_path} no es una lista. Se inicializará como lista vacía.")
-            except json.JSONDecodeError:
+                data = json5.loads(_trim_to_first_json_document(raw_text))
+            except ValueError:
                 print(f"Advertencia: {file_path} está corrupto. Se inicializará como lista vacía.")
+                return []
+
+        if isinstance(data, list):  # Verifica si es una lista
+            return cast(list[dict[str, Any]], data)
+        else:
+            print(f"Advertencia: {file_path} no es una lista. Se inicializará como lista vacía.")
     return []  # Retorna una lista vacía si el archivo no existe o no es válido
 
 # Guardar datos en archivos JSON
-def save_json(file_path, data):
+def save_json(file_path: str, data: list[dict[str, Any]]) -> None:
     with open(file_path, "w") as file:
         json.dump(data, file, indent=4)
 
@@ -70,9 +124,16 @@ def process_addons(addons_path, behavior_path, resource_path, behavior_json_path
             continue
 
         try:
-            with open(manifest_path, "r") as file:
-                manifest = json.load(file)
-        except json.JSONDecodeError as e:
+            with open(manifest_path, "r", encoding="utf-8") as file:
+                raw_manifest = file.read()
+            try:
+                manifest = cast(dict[str, Any], json5.loads(raw_manifest))
+            except ValueError:
+                manifest = cast(
+                    dict[str, Any],
+                    json5.loads(_trim_to_first_json_document(raw_manifest)),
+                )
+        except ValueError as e:
             print(f"Error al leer el manifest.json en {folder}: {e}")
             print(f"El addon {folder} debe ser revisado manualmente.")
             continue
@@ -81,6 +142,7 @@ def process_addons(addons_path, behavior_path, resource_path, behavior_json_path
         modules = manifest.get("modules", [])
         uuid = header.get("uuid")
         version = header.get("version")
+        pack_name = header.get("name", folder)
         if not uuid or not version or not modules:
             print(f"Manifest.json en {folder} no tiene los datos necesarios. El addon debe ser revisado manualmente.")
             continue
@@ -107,127 +169,20 @@ def process_addons(addons_path, behavior_path, resource_path, behavior_json_path
             if version > existing_version:
                 print(f"Actualizando {folder} a una nueva versión")
                 target_json.remove(existing)
-                target_json.append({"pack_id": uuid, "version": version})
+                target_json.append({"pack_id": uuid, "version": version, "name": pack_name})
                 save_json(json_path, target_json)
-                shutil.move(folder_path, target_path)
+                _move_replacing_existing(folder_path, os.path.join(target_path, folder))
             else:
                 print(f"El addon {folder} ya está en su mejor versión")
                 shutil.rmtree(folder_path)
                 continue
         else:
             # Agregar nuevo UUID y mover carpeta
-            target_json.append({"pack_id": uuid, "version": version})
+            target_json.append({"pack_id": uuid, "version": version, "name": pack_name})
             save_json(json_path, target_json)
-            shutil.move(folder_path, target_path)
+            _move_replacing_existing(folder_path, os.path.join(target_path, folder))
 
     print(f"Se añadieron {added_behavior} behavior packs y {added_resource} resource packs.")
-
-def clean_unregistered_addons(behavior_path, resource_path, behavior_json_path, resource_json_path):
-    # Cargar los datos registrados en los archivos JSON
-    behavior_packs = load_or_initialize_json(behavior_json_path)
-    resource_packs = load_or_initialize_json(resource_json_path)
-
-    # Obtener los UUIDs registrados
-    registered_behavior_uuids = {pack["pack_id"] for pack in behavior_packs}
-    registered_resource_uuids = {pack["pack_id"] for pack in resource_packs}
-
-    # Limpiar behavior_packs
-    for folder in os.listdir(behavior_path):
-        folder_path = os.path.join(behavior_path, folder)
-        manifest_path = os.path.join(folder_path, "manifest.json")
-        if os.path.isdir(folder_path) and os.path.exists(manifest_path):
-            try:
-                with open(manifest_path, "r") as file:
-                    manifest = json.load(file)
-                    uuid = manifest.get("header", {}).get("uuid")
-                    if uuid not in registered_behavior_uuids:
-                        print(f"Eliminando addon no registrado en behavior_packs: {folder}")
-                        shutil.rmtree(folder_path)
-            except json.JSONDecodeError as e:
-                print(f"Error al leer el manifest.json en {folder}: {e}")
-                print(f"El addon {folder} debe ser revisado manualmente.")
-                continue
-
-    # Limpiar resource_packs
-    for folder in os.listdir(resource_path):
-        folder_path = os.path.join(resource_path, folder)
-        manifest_path = os.path.join(folder_path, "manifest.json")
-        if os.path.isdir(folder_path) and os.path.exists(manifest_path):
-            try:
-                with open(manifest_path, "r") as file:
-                    manifest = json.load(file)
-                    uuid = manifest.get("header", {}).get("uuid")
-                    if uuid not in registered_resource_uuids:
-                        print(f"Eliminando addon no registrado en resource_packs: {folder}")
-                        shutil.rmtree(folder_path)
-            except (json.JSONDecodeError, KeyError):
-                print(f"Error al procesar el manifest.json en {folder}.")
-                print(f"Revisar manualmente el addon en la carpeta: {folder_path}")
-                print(f"Tipo: {'behavior' if folder_path.startswith(behavior_path) else 'resource'}")
-                try:
-                    with open(manifest_path, "r") as file:
-                        manifest = json.load(file)
-                        uuid = manifest.get("header", {}).get("uuid", "Desconocido")
-                        version = manifest.get("header", {}).get("version", "Desconocida")
-                        print(f"UUID: {uuid}")
-                        print(f"Versión: {version}")
-                except json.JSONDecodeError:
-                    print("El archivo manifest.json está corrupto y no se pudo leer.")
-
-def clean_orphaned_entries(behavior_path, resource_path, behavior_json_path, resource_json_path):
-    behavior_packs = load_or_initialize_json(behavior_json_path)
-    updated_behavior_packs = []
-
-    for pack in behavior_packs:
-        pack_id = pack["pack_id"]
-        found = False
-        for folder in os.listdir(behavior_path):
-            folder_path = os.path.join(behavior_path, folder)
-            manifest_path = os.path.join(folder_path, "manifest.json")
-            if os.path.isdir(folder_path) and os.path.exists(manifest_path):
-                try:
-                    with open(manifest_path, "r") as file:
-                        manifest = json.load(file)
-                        if manifest.get("header", {}).get("uuid") == pack_id:
-                            found = True
-                            break
-                except json.JSONDecodeError as e:
-                    print(f"Error al leer el manifest.json en {folder}: {e}")
-                    print(f"El addon {folder} debe ser revisado manualmente.")
-                    continue
-
-        if found:
-            updated_behavior_packs.append(pack)
-        else:
-            print(f"Eliminando entrada huérfana en world_behavior_packs.json: {pack_id}")
-
-    save_json(behavior_json_path, updated_behavior_packs)
-
-    # Limpiar entradas huérfanas en world_resource_packs.json
-    resource_packs = load_or_initialize_json(resource_json_path)
-    updated_resource_packs = []
-
-    for pack in resource_packs:
-        pack_id = pack["pack_id"]
-        found = False
-        for folder in os.listdir(resource_path):
-            folder_path = os.path.join(resource_path, folder)
-            manifest_path = os.path.join(folder_path, "manifest.json")
-            if os.path.isdir(folder_path) and os.path.exists(manifest_path):
-                try:
-                    with open(manifest_path, "r") as file:
-                        manifest = json.load(file)
-                        if manifest.get("header", {}).get("uuid") == pack_id:
-                            found = True
-                            break
-                except json.JSONDecodeError:
-                    print(f"Error al leer el manifest.json en {folder_path}.")
-        if found:
-            updated_resource_packs.append(pack)
-        else:
-            print(f"Eliminando entrada huérfana en world_resource_packs.json: {pack_id}")
-
-    save_json(resource_json_path, updated_resource_packs)
 
 def extract_mcaddon_and_mcpack(addons_path):
     for file in os.listdir(addons_path):
@@ -255,10 +210,10 @@ def process_mcaddon_and_mcpack(addons_path):
         if os.path.exists(manifest_path):
             try:
                 with open(manifest_path, "r") as file:
-                    manifest = json.load(file)
+                        manifest = json5.load(file)
                 print(f"Se encontró manifest.json en {folder_path}. Procediendo con el registro.")
                 return True
-            except json.JSONDecodeError as e:
+            except ValueError as e:
                 print(f"Error al leer el manifest.json en {folder_path}: {e}")
                 print(f"El addon debe ser revisado manualmente.")
                 return False
@@ -365,16 +320,32 @@ resource_json_path = os.path.join(base_path, f"worlds/{level_name}/world_resourc
 
 # Procesar los addons
 
-clean_unregistered_addons(behavior_path, resource_path, behavior_json_path, resource_json_path)
-clean_orphaned_entries(behavior_path, resource_path, behavior_json_path, resource_json_path)
+# clean_unregistered_addons(behavior_path, resource_path, behavior_json_path, resource_json_path)
+# clean_orphaned_entries(behavior_path, resource_path, behavior_json_path, resource_json_path)
 extract_mcaddon_and_mcpack(addons_path)
 process_mcaddon_and_mcpack(addons_path)
 process_folders_in_addons(addons_path)
 process_addons_in_addons_path(addons_path)
 process_addons(addons_path, behavior_path, resource_path, behavior_json_path, resource_json_path)
 
+print(r"""
+ /$$$$$$$                                      /$$       /$$
+| $$__  $$                                    | $$      | $$
+| $$  \ $$  /$$$$$$  /$$$$$$$   /$$$$$$   /$$$$$$$  /$$$$$$$
+| $$  | $$ |____  $$| $$__  $$ /$$__  $$ /$$__  $$ /$$__  $$
+| $$  | $$  /$$$$$$$| $$  \ $$| $$$$$$$$| $$  | $$| $$  | $$
+| $$  | $$ /$$__  $$| $$  | $$| $$_____/| $$  | $$| $$  | $$
+| $$$$$$$/|  $$$$$$$| $$  | $$|  $$$$$$$|  $$$$$$$|  $$$$$$$
+|_______/  \_______/|__/  |__/ \_______/ \_______/ \_______/
+                                                            
+                                                            
+                                                            
+Instalador de addons para Server Minecraft Bedrock Edition creado por Danedd.
+      """)
+
+time.sleep(3)
 # Ejecutar el servidor Bedrock
 try:
     subprocess.run(["./bedrock_server"], check=True)
-except subprocess.CalledProcessError as e:
+except Exception as e:
     print(f"Error al iniciar el servidor: {e}")
