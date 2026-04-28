@@ -328,7 +328,9 @@ process_folders_in_addons(addons_path)
 process_addons_in_addons_path(addons_path)
 process_addons(addons_path, behavior_path, resource_path, behavior_json_path, resource_json_path)
 
-print(r"""
+verde = "\033[32m"
+reset = "\033[0m"
+print(rf"""{verde}
  /$$$$$$$                                      /$$       /$$
 | $$__  $$                                    | $$      | $$
 | $$  \ $$  /$$$$$$  /$$$$$$$   /$$$$$$   /$$$$$$$  /$$$$$$$
@@ -340,8 +342,8 @@ print(r"""
                                                             
                                                             
                                                             
-Instalador de addons para Server Minecraft Bedrock Edition creado por Danedd.
-      """)
+Potenciado con instalador de addons para\nServer Minecraft Bedrock Edition creado por Danedd.
+      {reset}""")
 
 time.sleep(3)
 # Ejecutar el servidor Bedrock
